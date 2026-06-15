@@ -1,0 +1,21 @@
+{
+  "name": "notpvpbros VPM Repository",
+  "id": "com.notpvpbros.repos.mmdunity",
+  "author": "notpvpbros",
+  "url": "https://notpvpbros.github.io/MMDUnity/index.json",
+  "packages": {
+    "com.notpvpbros.mmdunity": {
+      "versions": {
+        "1.0.0": {
+          "name": "com.notpvpbros.mmdunity",
+          "version": "1.0.0",
+          "displayName": "MMD Blendshape Builder",
+          "description": "An EditorWindow tool to quickly build and duplicate MMD blendshapes within Unity.",
+          "unity": "2022.3",
+          "url": "https://github.com/notpvpbros/MMDUnity/releases/download/v1.0.0/com.notpvpbros.mmdunity.zip",
+          "vpmDependencies": {}
+        }
+      }
+    }
+  }
+}
