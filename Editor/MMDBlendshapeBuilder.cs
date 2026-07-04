@@ -16,7 +16,8 @@ public class MMDBlendshapeBuilder : EditorWindow
 {
     private SkinnedMeshRenderer smr;
     private Vector2 scroll;
-    private bool fillExisting = true;
+    private bool fillExisting = false;
+    private string lastPrefillSummary;
     private bool synthesize = true;
     private bool spellingVariants = true;
     private bool emptyPlaceholders = false;
@@ -145,7 +146,7 @@ public class MMDBlendshapeBuilder : EditorWindow
         { "m_omega", new[]{ "omega", "catmouth", "w3" } },
         { "m_tooth_up", new[]{ "toothanon", "hideupperteeth", "upperteethoff" } },
         { "m_tooth_dn", new[]{ "toothbnon", "hidelowerteeth", "lowerteethoff" } },
-        { "e_blink", new[]{ "blink", "blinkboth", "eyesclosed" } },
+        { "e_blink", new[]{ "blink", "blinkboth", "eyesclosed", "eyeclose", "eyesclose", "eyeclosed", "close", "closed" } },
         { "e_smile", new[]{ "blinkhappy", "happyblink", "eyeshappy", "eyesmile", "eyessmile", "happy" } },
         { "e_hau", new[]{ "closex", "eyesclosex" } },
         { "e_nagomi", new[]{ "calm", "nagomi" } },
@@ -159,8 +160,8 @@ public class MMDBlendshapeBuilder : EditorWindow
         { "e_wail", new[]{ "wail", "cry", "crying", "teary" } },
         { "e_hostility", new[]{ "hostility" } },
         { "b_serious", new[]{ "serious", "browserious" } },
-        { "b_trouble", new[]{ "trouble", "sadness", "sad", "browsad", "browssad", "browtrouble" } },
-        { "b_smily", new[]{ "cheerful", "smily", "browhappy", "browshappy", "browsmile" } },
+        { "b_trouble", new[]{ "trouble", "sadness", "sad", "sorrow", "browsad", "browssad", "browtrouble" } },
+        { "b_smily", new[]{ "cheerful", "smily", "fun", "browhappy", "browshappy", "browsmile" } },
         { "b_anger", new[]{ "anger", "angry", "browangry", "browsangry", "browanger" } },
         { "b_up", new[]{ "upper", "browup", "browsup", "eyebrowup", "eyebrowsup" } },
         { "b_down", new[]{ "lower", "browdown", "browsdown", "eyebrowdown", "eyebrowsdown" } },
@@ -247,7 +248,8 @@ public class MMDBlendshapeBuilder : EditorWindow
         addOptions[0] = "+ add shape";
         for (int i = 0; i < names.Length; i++) addOptions[i + 1] = names[i];
 
-        fillExisting = EditorGUILayout.ToggleLeft("Fill existing target shape keys as placeholder", fillExisting);
+        fillExisting = EditorGUILayout.ToggleLeft("Self-map targets that already exist on the mesh (only for exporting mappings — hides real prefill suggestions)", fillExisting);
+        if (!string.IsNullOrEmpty(lastPrefillSummary)) EditorGUILayout.HelpBox(lastPrefillSummary, MessageType.None);
         synthesize = EditorGUILayout.ToggleLeft("Synthesize missing shapes from recipes (expressive mode)", synthesize);
         spellingVariants = EditorGUILayout.ToggleLeft("Also write katakana spelling variants for winks (compatibility)", spellingVariants);
         emptyPlaceholders = EditorGUILayout.ToggleLeft("Create zero-delta placeholders for anything still missing (does nothing visually)", emptyPlaceholders);
@@ -282,9 +284,10 @@ public class MMDBlendshapeBuilder : EditorWindow
             {
                 lastCat = row.cat;
                 if (!foldouts.ContainsKey(lastCat)) foldouts[lastCat] = true;
-                int mapped = 0, total = 0;
-                foreach (var r in rows) if (r.cat == lastCat) { total++; if (r.sources.Count > 0) mapped++; }
-                foldouts[lastCat] = EditorGUILayout.Foldout(foldouts[lastCat], $"{lastCat}  ({mapped}/{total} mapped)", true);
+                int mapped = 0, total = 0, exist = 0;
+                foreach (var r in rows) if (r.cat == lastCat)
+                { total++; if (r.sources.Count > 0) mapped++; if (!r.custom && System.Array.IndexOf(names, r.mmd) >= 0) exist++; }
+                foldouts[lastCat] = EditorGUILayout.Foldout(foldouts[lastCat], $"{lastCat}  ({mapped}/{total} mapped, {exist} already on mesh)", true);
                 open = foldouts[lastCat];
             }
             if (open) DrawRow(row, names, addOptions);
@@ -307,7 +310,8 @@ public class MMDBlendshapeBuilder : EditorWindow
             }
             else
             {
-                string hint = row.sources.Count == 0 && Recipes.ContainsKey(row.key) ? "  (auto)" : "";
+                bool onMesh = System.Array.IndexOf(names, row.mmd) >= 0;
+                string hint = onMesh ? "  ✓" : (row.sources.Count == 0 && Recipes.ContainsKey(row.key) ? "  (auto)" : "");
                 EditorGUILayout.LabelField($"{row.mmd}  {row.label}{hint}", GUILayout.Width(210));
             }
 
@@ -332,12 +336,12 @@ public class MMDBlendshapeBuilder : EditorWindow
     // ---------------------------------------------------------------- PREFILL
     private void Prefill(Mesh mesh)
     {
-        int filled = 0;
+        var picks = new List<string>();
 
         if (fillExisting)
             foreach (var row in rows)
                 if (!row.custom && row.sources.Count == 0 && mesh.GetBlendShapeIndex(row.mmd) >= 0)
-                { row.sources.Add(new Source { name = row.mmd }); filled++; }
+                    row.sources.Add(new Source { name = row.mmd });
 
         for (int i = 0; i < mesh.blendShapeCount; i++)
         {
@@ -346,31 +350,59 @@ public class MMDBlendshapeBuilder : EditorWindow
             string joinedCore = string.Concat(a.core);
             string joinedAll = string.Concat(a.all);
 
+            // Category hints keep shapes on the right rows (brow beats eye: "EyeBrow" splits into both).
+            bool browHint = a.all.Contains("brow") || a.all.Contains("brows") || a.all.Contains("brw") || a.all.Contains("eyebrow") || a.all.Contains("eyebrows");
+            bool eyeHint = !browHint && (a.all.Contains("eye") || a.all.Contains("eyes") || joinedAll.StartsWith("eye"));
+            bool mouthHint = !browHint && !eyeHint && (a.all.Contains("mouth") || a.all.Contains("mth") || a.all.Contains("mouse") || a.all.Contains("lip") || a.all.Contains("lips"));
+            char catGuard = browHint ? 'b' : eyeHint ? 'e' : mouthHint ? 'm' : '\0';
+
             // Wink family — two/right detection.
             if (a.core.Contains("wink"))
             {
                 bool two = a.core.Contains("2") || name.Contains("2") || a.core.Contains("happy");
                 string pk = two ? (a.right ? "e_wink2_r" : "e_wink2") : (a.right ? "e_wink_r" : "e_wink");
-                if (AssignIfEmpty(pk, name)) filled++;
+                if (AssignIfEmpty(pk, name)) picks.Add($"{RowMmd(pk)} ← {name}");
                 continue;
             }
+            // Per-eye close = wink geometry (better than splitting a blink in half later).
+            if (eyeHint && (a.left || a.right) && (a.core.Contains("close") || a.core.Contains("closed")))
+            {
+                string pk = a.right ? "e_wink_r" : "e_wink";
+                if (AssignIfEmpty(pk, name)) { picks.Add($"{RowMmd(pk)} ← {name}"); continue; }
+            }
             // Per-side brows.
-            if ((a.left || a.right) && (joinedAll.Contains("brow") || joinedAll.Contains("eyebrow")))
+            if ((a.left || a.right) && browHint)
             {
                 string pk = null;
                 if (a.core.Contains("up") || a.core.Contains("upper")) pk = a.left ? "b_l_up" : "b_r_up";
                 else if (a.core.Contains("down") || a.core.Contains("lower")) pk = a.left ? "b_l_down" : "b_r_down";
-                if (pk != null && AssignIfEmpty(pk, name)) { filled++; continue; }
+                if (pk != null && AssignIfEmpty(pk, name)) { picks.Add($"{RowMmd(pk)} ← {name}"); continue; }
             }
 
+            // Pass 1: full name (most specific). Pass 2: junk-stripped core. Category hints filter both.
+            string hitKey = null;
             foreach (var kv in PrefillTokens)
-            {
-                bool hit = System.Array.IndexOf(kv.Value, joinedCore) >= 0 || System.Array.IndexOf(kv.Value, joinedAll) >= 0;
-                if (hit) { if (AssignIfEmpty(kv.Key, name)) filled++; break; }
-            }
+                if ((catGuard == '\0' || kv.Key[0] == catGuard) && System.Array.IndexOf(kv.Value, joinedAll) >= 0) { hitKey = kv.Key; break; }
+            if (hitKey == null)
+                foreach (var kv in PrefillTokens)
+                    if ((catGuard == '\0' || kv.Key[0] == catGuard) && System.Array.IndexOf(kv.Value, joinedCore) >= 0) { hitKey = kv.Key; break; }
+            if (hitKey != null && AssignIfEmpty(hitKey, name)) picks.Add($"{RowMmd(hitKey)} ← {name}");
         }
-        Debug.Log($"Prefilled {filled} rows (one shape each). Review and edit, then hit Build.");
+
+        int onMesh = 0, unmatched = 0;
+        foreach (var row in rows)
+        {
+            if (row.custom) continue;
+            if (mesh.GetBlendShapeIndex(row.mmd) >= 0) onMesh++;
+            else if (row.sources.Count == 0) unmatched++;
+        }
+        lastPrefillSummary = $"Prefill proposed {picks.Count} mappings (shown in the rows below — nothing is written until you hit Build). " +
+                             $"{onMesh} targets already exist on the mesh and were left alone. {unmatched} targets have no source yet" +
+                             (unmatched > 0 && synthesize ? " (recipes will cover the ones marked (auto))." : ".");
+        Debug.Log($"Prefill proposals:\n  {(picks.Count > 0 ? string.Join("\n  ", picks) : "(none — every recognizable shape is either already on the mesh or already assigned)")}\n{lastPrefillSummary}");
     }
+
+    private string RowMmd(string key) { var r = rows.Find(x => x.key == key); return r != null ? r.mmd : key; }
 
     private bool AssignIfEmpty(string key, string sourceName)
     {
@@ -434,6 +466,14 @@ public class MMDBlendshapeBuilder : EditorWindow
         // Pass 2 — recipe synthesis for empty rows (multi-pass so recipes can chain, e.g. jito -> kiri).
         if (synthesize)
         {
+            // Shapes the mesh already ships count as available ingredients even when their rows are empty.
+            foreach (var row in rows)
+            {
+                if (row.custom || resolved.ContainsKey(row.key)) continue;
+                if (mesh.GetBlendShapeIndex(row.mmd) < 0) continue;
+                resolved[row.key] = Accumulate(mesh, vc, new List<Source> { new Source { name = row.mmd } }, mergeMode);
+            }
+
             Vector3[] verts = null; float falloff = 0f;
             for (int pass = 0; pass < 4; pass++)
             {
