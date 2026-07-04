@@ -32,6 +32,15 @@
           "unity": "2022.3",
           "url": "https://notpvpbros.github.io/MMDUnity/dist/com.notpvpbros.mmdunity-2.0.1.zip",
           "vpmDependencies": {}
+        },
+        "2.0.2": {
+          "name": "com.notpvpbros.mmdunity",
+          "version": "2.0.2",
+          "displayName": "MMD Blendshape Builder",
+          "description": "Build the full MMD blendshape chart (59 targets) on any avatar: weighted multi-source merging, recipe synthesis for missing expressions, L/R wink and brow splitting, and katakana spelling variants for maximum dance-world compatibility. 2.0.2: Blender-add-on-style rows \u2014 the chosen source shape now shows directly in each dropdown; prefill results are immediately visible and editable.",
+          "unity": "2022.3",
+          "url": "https://notpvpbros.github.io/MMDUnity/dist/com.notpvpbros.mmdunity-2.0.2.zip",
+          "vpmDependencies": {}
         }
       }
     }

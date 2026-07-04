@@ -16,7 +16,7 @@ public class MMDBlendshapeBuilder : EditorWindow
 {
     private SkinnedMeshRenderer smr;
     private Vector2 scroll;
-    private bool fillExisting = false;
+    private bool fillExisting = true;
     private string lastPrefillSummary;
     private bool synthesize = true;
     private bool spellingVariants = true;
@@ -245,10 +245,13 @@ public class MMDBlendshapeBuilder : EditorWindow
         string[] names = new string[mesh.blendShapeCount];
         for (int i = 0; i < names.Length; i++) names[i] = mesh.GetBlendShapeName(i);
         string[] addOptions = new string[names.Length + 1];
-        addOptions[0] = "+ add shape";
+        addOptions[0] = "(none)";
         for (int i = 0; i < names.Length; i++) addOptions[i + 1] = names[i];
+        if (secondaryOptions == null || secondaryOptions.Length != addOptions.Length)
+        { secondaryOptions = (string[])addOptions.Clone(); secondaryOptions[0] = "+"; }
+        else { for (int i = 0; i < names.Length; i++) secondaryOptions[i + 1] = names[i]; }
 
-        fillExisting = EditorGUILayout.ToggleLeft("Self-map targets that already exist on the mesh (only for exporting mappings — hides real prefill suggestions)", fillExisting);
+        fillExisting = EditorGUILayout.ToggleLeft("Prefill also self-maps targets that already exist on the mesh (like the Blender add-on)", fillExisting);
         if (!string.IsNullOrEmpty(lastPrefillSummary)) EditorGUILayout.HelpBox(lastPrefillSummary, MessageType.None);
         synthesize = EditorGUILayout.ToggleLeft("Synthesize missing shapes from recipes (expressive mode)", synthesize);
         spellingVariants = EditorGUILayout.ToggleLeft("Also write katakana spelling variants for winks (compatibility)", spellingVariants);
@@ -304,9 +307,8 @@ public class MMDBlendshapeBuilder : EditorWindow
         {
             if (row.custom)
             {
-                row.label = EditorGUILayout.TextField(row.label, GUILayout.Width(150));
+                row.label = EditorGUILayout.TextField(row.label, GUILayout.Width(206));
                 row.mmd = row.label;
-                if (GUILayout.Button("−", GUILayout.Width(20))) { row.sources.Clear(); row.label = ""; }
             }
             else
             {
@@ -315,33 +317,69 @@ public class MMDBlendshapeBuilder : EditorWindow
                 EditorGUILayout.LabelField($"{row.mmd}  {row.label}{hint}", GUILayout.Width(210));
             }
 
-            int add = EditorGUILayout.Popup(0, addOptions, GUILayout.Width(90));
-            if (add > 0)
+            // Primary source dropdown — shows the chosen shape right in the control, Blender-plugin style.
+            int cur = 0;
+            bool primaryMissing = false;
+            if (row.sources.Count > 0)
             {
-                string nm = names[add - 1];
-                if (row.sources.Find(s => s.name == nm) == null) row.sources.Add(new Source { name = nm });
+                int f = System.Array.IndexOf(names, row.sources[0].name);
+                if (f >= 0) cur = f + 1; else primaryMissing = true;
+            }
+            if (primaryMissing)
+            {
+                EditorGUILayout.LabelField("(?) " + row.sources[0].name, EditorStyles.miniLabel, GUILayout.Width(160));
+                if (GUILayout.Button("✕", EditorStyles.miniButton, GUILayout.Width(20))) row.sources.RemoveAt(0);
+            }
+            else
+            {
+                int sel = EditorGUILayout.Popup(cur, addOptions, GUILayout.Width(160));
+                if (sel != cur)
+                {
+                    if (sel == 0) { if (row.sources.Count > 0) row.sources.RemoveAt(0); }
+                    else
+                    {
+                        var pick = new Source { name = names[sel - 1], weight = row.sources.Count > 0 ? row.sources[0].weight : 1f };
+                        if (row.sources.Count > 0) row.sources[0] = pick; else row.sources.Add(pick);
+                    }
+                }
+                if (row.sources.Count > 0)
+                    row.sources[0].weight = EditorGUILayout.FloatField(row.sources[0].weight, GUILayout.Width(35));
             }
 
-            for (int j = row.sources.Count - 1; j >= 0; j--)
+            // Extra sources (multi-source merge) with weights.
+            for (int j = 1; j < row.sources.Count; j++)
             {
                 var src = row.sources[j];
                 bool missing = System.Array.IndexOf(names, src.name) < 0;
-                EditorGUILayout.LabelField((missing ? "(?) " : "") + src.name, EditorStyles.miniLabel, GUILayout.Width(120));
+                EditorGUILayout.LabelField((missing ? "(?) " : "+ ") + src.name, EditorStyles.miniLabel, GUILayout.Width(120));
                 src.weight = EditorGUILayout.FloatField(src.weight, GUILayout.Width(35));
-                if (GUILayout.Button("✕", EditorStyles.miniButton, GUILayout.Width(20))) row.sources.RemoveAt(j);
+                if (GUILayout.Button("✕", EditorStyles.miniButton, GUILayout.Width(20))) { row.sources.RemoveAt(j); break; }
             }
+            if (row.sources.Count > 0)
+            {
+                int add = EditorGUILayout.Popup(0, secondaryOptions ?? addOptions, GUILayout.Width(36));
+                if (add > 0)
+                {
+                    string nm = names[add - 1];
+                    if (row.sources.Find(s => s.name == nm) == null) row.sources.Add(new Source { name = nm });
+                }
+            }
+            if (row.custom && GUILayout.Button("−", GUILayout.Width(20))) { row.sources.Clear(); row.label = ""; }
         }
     }
+
+    private string[] secondaryOptions;
 
     // ---------------------------------------------------------------- PREFILL
     private void Prefill(Mesh mesh)
     {
         var picks = new List<string>();
+        int selfMapped = 0;
 
         if (fillExisting)
             foreach (var row in rows)
                 if (!row.custom && row.sources.Count == 0 && mesh.GetBlendShapeIndex(row.mmd) >= 0)
-                    row.sources.Add(new Source { name = row.mmd });
+                { row.sources.Add(new Source { name = row.mmd }); selfMapped++; }
 
         for (int i = 0; i < mesh.blendShapeCount; i++)
         {
@@ -389,15 +427,14 @@ public class MMDBlendshapeBuilder : EditorWindow
             if (hitKey != null && AssignIfEmpty(hitKey, name)) picks.Add($"{RowMmd(hitKey)} ← {name}");
         }
 
-        int onMesh = 0, unmatched = 0;
+        int unmatched = 0;
         foreach (var row in rows)
         {
             if (row.custom) continue;
-            if (mesh.GetBlendShapeIndex(row.mmd) >= 0) onMesh++;
-            else if (row.sources.Count == 0) unmatched++;
+            if (mesh.GetBlendShapeIndex(row.mmd) < 0 && row.sources.Count == 0) unmatched++;
         }
-        lastPrefillSummary = $"Prefill proposed {picks.Count} mappings (shown in the rows below — nothing is written until you hit Build). " +
-                             $"{onMesh} targets already exist on the mesh and were left alone. {unmatched} targets have no source yet" +
+        lastPrefillSummary = $"Prefill proposed {picks.Count} new mappings and self-mapped {selfMapped} targets that already exist (all visible in the dropdowns below — nothing is written until you hit Build). " +
+                             $"{unmatched} targets have no source yet" +
                              (unmatched > 0 && synthesize ? " (recipes will cover the ones marked (auto))." : ".");
         Debug.Log($"Prefill proposals:\n  {(picks.Count > 0 ? string.Join("\n  ", picks) : "(none — every recognizable shape is either already on the mesh or already assigned)")}\n{lastPrefillSummary}");
     }
